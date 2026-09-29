@@ -1,0 +1,15 @@
+{
+	"required": true,
+	"package": "com.goofy.viberotations.client.mixin",
+	"compatibilityLevel": "JAVA_21",
+	"client": [
+		"EntityMixin",
+		"MinecraftMixin"
+	],
+	"injectors": {
+		"defaultRequire": 1
+	},
+	"overwrites": {
+		"requireAnnotations": true
+	}
+}

@@ -1,0 +1,37 @@
+{
+	"schemaVersion": 1,
+	"id": "goofy-viberotations",
+	"version": "${version}",
+	"name": "Goofy VibeRotations",
+	"description": "Records your PvP rotations, movement and clicks to CSV, and a singleplayer NPC that replays a human-style rotation model for side-by-side analysis.",
+	"authors": [
+		"Goofythesecond"
+	],
+	"contact": {
+		"sources": "https://github.com/Goofythesecond/goofy-viberotations",
+		"issues": "https://github.com/Goofythesecond/goofy-viberotations/issues"
+	},
+	"license": "CC0-1.0",
+	"icon": "assets/goofy-viberotations/icon.png",
+	"environment": "client",
+	"entrypoints": {
+		"main": [
+			"com.goofy.viberotations.VibeRotations"
+		],
+		"client": [
+			"com.goofy.viberotations.client.VibeRotationsClient"
+		]
+	},
+	"mixins": [
+		{
+			"config": "goofy-viberotations.client.mixins.json",
+			"environment": "client"
+		}
+	],
+	"depends": {
+		"fabricloader": ">=0.19.3",
+		"minecraft": "~1.21.11",
+		"java": ">=21",
+		"fabric-api": "*"
+	}
+}

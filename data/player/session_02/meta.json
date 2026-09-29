@@ -1,0 +1,12 @@
+{
+  "format_version": 2,
+  "minecraft_version": "1.21.11",
+  "player": "self",
+  "server": "redacted",
+  "mouse_sensitivity": 0.3849765258215962,
+  "fov": 90,
+  "raw_mouse_input": true,
+  "framerate_limit": 260,
+  "target_range": 8.0,
+  "fight_gap_ticks": 60
+}
