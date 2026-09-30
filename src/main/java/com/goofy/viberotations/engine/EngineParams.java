@@ -29,6 +29,11 @@ public final class EngineParams {
 	 * start and stop more abruptly.
 	 */
 	public double profileTrim = 0.1;
+	/**
+	 * Blends the speed profile toward constant speed: 0 = minimum-jerk bell, 1 = linear.
+	 * Only deliberate "constant speed" movements (training mode) need values above 0.
+	 */
+	public double profileLinear = 0;
 
 	/** Sideways bulge of the flick path, as a fraction of amplitude (normal, sd). */
 	public double curvatureSd = 0.04;
@@ -112,6 +117,42 @@ public final class EngineParams {
 			}
 		}
 		throw new IllegalArgumentException("Unknown parameter: " + name);
+	}
+
+	/** A parameter as a number; int fields are widened. */
+	public double value(String name) {
+		return Double.parseDouble(get(name));
+	}
+
+	/** Sets a parameter from a number; int fields are rounded. */
+	public void setValue(String name, double value) {
+		for (Field f : fields()) {
+			if (f.getName().equals(name)) {
+				try {
+					if (f.getType() == int.class) {
+						f.setInt(this, (int) Math.round(value));
+					} else {
+						f.setDouble(this, value);
+					}
+					return;
+				} catch (IllegalAccessException e) {
+					throw new IllegalStateException(e);
+				}
+			}
+		}
+		throw new IllegalArgumentException("Unknown parameter: " + name);
+	}
+
+	/** "name=value,..." for every parameter, the format {@link #apply} and the harness read. */
+	public String toPairs() {
+		StringBuilder sb = new StringBuilder();
+		for (String name : names()) {
+			if (!sb.isEmpty()) {
+				sb.append(',');
+			}
+			sb.append(name).append('=').append(get(name));
+		}
+		return sb.toString();
 	}
 
 	/** Applies "name=value,name=value" pairs. */

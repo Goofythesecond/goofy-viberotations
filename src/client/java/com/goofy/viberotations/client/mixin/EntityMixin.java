@@ -1,6 +1,7 @@
 package com.goofy.viberotations.client.mixin;
 
 import com.goofy.viberotations.client.PvpRecorder;
+import com.goofy.viberotations.client.TrainingMode;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.world.entity.Entity;
 import org.spongepowered.asm.mixin.Mixin;
@@ -15,6 +16,7 @@ public class EntityMixin {
 	private void rotationLogger$onTurn(double yRot, double xRot, CallbackInfo ci) {
 		if ((Object) this instanceof LocalPlayer player) {
 			PvpRecorder.INSTANCE.onTurn(player, yRot, xRot);
+			TrainingMode.INSTANCE.onTurn(player, yRot, xRot);
 		}
 	}
 }

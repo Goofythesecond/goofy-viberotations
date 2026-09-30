@@ -10,7 +10,7 @@ It does three things:
 
 A redacted sample dataset (about 17 minutes of real PvP, plus two NPC runs) is included in [`data/`](data/).
 
-> The NPC and its commands only exist in **singleplayer** worlds. Nothing in this mod turns your own camera; it only records it.
+> The NPC and its commands only exist in **singleplayer** worlds. Nothing in this mod turns your own camera; it only records it (training mode included).
 
 ---
 
@@ -41,14 +41,20 @@ Every column is documented in [docs/PVP_DATA.md](docs/PVP_DATA.md).
 |---|---|
 | `/npc spawn` | Spawn the NPC at your position, facing your direction |
 | `/npc moveto <yaw> <pitch> [<yaw> <pitch> ...]` | Turn to each waypoint in order. `~10` = 10° relative to the previous one |
-| `/npc delay <ms>` | Pause at each waypoint |
+| `/npc delay <ms>` | Pause at each `moveto` waypoint, and the rest between auto targets/bursts (`0` = random 150–600 ms) |
+| `/npc delay <min> <max>` | Random rest between auto targets/bursts, in ms |
 | `/npc auto start [mixed\|short\|long]` | Flick to random targets until stopped: short 4–15°, long 30–180° |
+| `/npc auto burst <count> [gap] [rest]` | Show `count` targets at once and flick through them back to back, pausing `gap` ms on each (default 0); `rest` ms between bursts. `/npc auto burst off` for one at a time |
+| `/npc auto blocks on\|off` | Show auto targets as glowing target blocks (on by default; the current one glows) |
+| `/npc auto settings` | Show the current auto settings |
 | `/npc auto stop`, `/npc stop`, `/npc remove` | Stop / remove |
 | `/npc record on\|off` | Record to `rotation-logs/npc_<date>/` (on by default) |
 | `/npc param <name> [value]`, `/npc params reset` | Read or change model parameters (applies on next spawn) |
 | `/npcview` | Toggle looking through the NPC's eyes |
 
-NPC recordings use the same `frames.csv` format as player recordings, plus `flicks.csv` (start, target, end, error, time and sub-movements per auto flick).
+NPC recordings use the same `frames.csv` format as player recordings, plus `flicks.csv` (start, target, end, error, time and sub-movements per auto flick, and `burst`, `burst_index`, `gap_ms`).
+
+Inside a burst the NPC can already see the next target, so every flick after the first starts after a short pause (`pauseMedianMs`) instead of a full reaction (`reactionMedianMs`), and starts where the previous flick ended. Its `start_ms`…`end_ms` duration includes the `gap_ms` pause. Target blocks are display entities, so they have no collision, don't replace anything, and are removed when reached, on `/npc auto stop` and on `/npc remove`.
 
 ### How the rotation model works
 `HumanRotationEngine` is plain Java (no Minecraft code), so the NPC and the offline harness run identical logic:
@@ -58,6 +64,37 @@ NPC recordings use the same `frames.csv` format as player recordings, plus `flic
 - **Mouse-like output:** movement arrives in uneven per-frame chunks, rounded to the mouse-sensitivity step.
 
 Every parameter is listed with its default in `EngineParams`.
+
+## Aim training and seeds
+
+`/vrtrain start [count]` runs an aim-training session in any world (survival works; nothing in the world is changed). A **target block** appears around you, anywhere from 3° to 180° away (so sometimes behind you), with an instruction above the hotbar:
+
+| Style | Instruction |
+|---|---|
+| natural | Aim at it like you would in a fight |
+| constant | Move onto it at a constant speed |
+| accel_mid | Speed up, fastest halfway, then slow down onto it |
+| flick | Flick onto it as fast as you can |
+| precise | Slow and precise: land on it in one movement |
+
+Rest your crosshair on the block for a quarter second to finish it. After each target you see your reaction time, total time, where your speed peaked, whether you landed short or overshot, and (for constant / accel_mid / precise) how closely you followed the instruction. Targets go to the direction (8 sectors), distance (6 bands) and style with the least data so far, or to the distances where your current seed matches you worst.
+
+When the session ends, a **seed** (one set of `EngineParams` per style) is fitted to all your training data in the background:
+
+- Each trial is permanently put in *train* (2/3) or *validation* (1/3). Fitting only uses train trials; seeds are compared only on validation trials.
+- The new seed starts from your current seed, so every session trains it further.
+- It replaces the current seed only if it scores higher **and** wins in ≥75% of bootstrap resamples of the validation trials. Otherwise it is **rejected**. Each of its parameter groups (timing, speed profile, landing, corrections, reaction, mouse input) is then tried inside the current seed, and any group that clearly helps is merged in as a new seed.
+
+| Command | Effect |
+|---|---|
+| `/vrtrain start [count]`, `/vrtrain stop` | Start / end a session (default 48 targets) |
+| `/vrtrain fit [iterations]` | Re-fit from all data now |
+| `/vrtrain seed` | Current seed: score, per-style scores, the 5 metrics furthest from you |
+| `/vrtrain seeds`, `/vrtrain use <id>` | History (including rejected seeds) / roll back |
+| `/vrtrain export [style]` | Print the parameters for `./gradlew harness -Pparams="..."` |
+| `/vrtrain npc [style]` | Give the seed to the singleplayer NPC (next `/npc spawn`) |
+
+Data goes to `.minecraft/rotation-logs/training/`: `sessions/<date>/` (`trials.csv`, plus a `frames.csv` in the recorder's format, so `analysis/compare.py` works on it) and `seeds/seed_<id>.json`.
 
 ## Analysis
 

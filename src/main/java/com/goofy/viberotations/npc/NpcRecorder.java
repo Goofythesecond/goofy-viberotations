@@ -45,7 +45,7 @@ final class NpcRecorder {
 		waypoints.newLine();
 		flicks = Files.newBufferedWriter(dir.resolve("flicks.csv"));
 		flicks.write("n,kind,start_ms,end_ms,duration_ms,start_yaw,start_pitch,target_yaw,target_pitch,"
-				+ "end_yaw,end_pitch,amplitude,end_error,submovements");
+				+ "end_yaw,end_pitch,amplitude,end_error,submovements,burst,burst_index,gap_ms");
 		flicks.newLine();
 		Files.writeString(dir.resolve("meta.json"), String.format(Locale.ROOT,
 				"{\n  \"source\": \"npc\",\n  \"seed\": %d,\n  \"started\": \"%s\",\n  \"params\": %s\n}\n",
@@ -79,14 +79,18 @@ final class NpcRecorder {
 		}
 	}
 
-	/** One row per /npc auto flick, written when the engine finishes it. */
-	void flick(int n, NpcAutoRun.Flick f, HumanRotationEngine e) {
-		double amp = Math.hypot(f.targetYaw() - f.startYaw(), f.targetPitch() - f.startPitch());
-		double err = Math.hypot(f.targetYaw() - e.yaw(), f.targetPitch() - e.pitch());
-		write(flicks, String.format(Locale.ROOT, "%d,%s,%.1f,%.1f,%.1f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%d",
-				n, f.kind(), f.startMs(), e.timeMs(), e.timeMs() - f.startMs(),
-				f.startYaw(), f.startPitch(), f.targetYaw(), f.targetPitch(), e.yaw(), e.pitch(),
-				amp, err, e.submovements()));
+	/**
+	 * One row per /npc auto flick, written when the engine reaches it. Inside a burst a flick
+	 * starts where the previous one ended, so its duration includes the {@code gap_ms} pause.
+	 */
+	void flick(int n, String kind, int burst, int index, int gapMs, double startMs, double startYaw, double startPitch,
+			double targetYaw, double targetPitch, HumanRotationEngine.Arrival end) {
+		double amp = Math.hypot(targetYaw - startYaw, targetPitch - startPitch);
+		double err = Math.hypot(targetYaw - end.yaw(), targetPitch - end.pitch());
+		write(flicks, String.format(Locale.ROOT, "%d,%s,%.1f,%.1f,%.1f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%d,%d,%d,%d",
+				n, kind, startMs, end.timeMs(), end.timeMs() - startMs,
+				startYaw, startPitch, targetYaw, targetPitch, end.yaw(), end.pitch(),
+				amp, err, end.submovements(), burst, index, gapMs));
 		try {
 			flicks.flush();
 		} catch (IOException ex) {

@@ -23,6 +23,7 @@
 		]
 	},
 	"mixins": [
+		"goofy-viberotations.mixins.json",
 		{
 			"config": "goofy-viberotations.client.mixins.json",
 			"environment": "client"

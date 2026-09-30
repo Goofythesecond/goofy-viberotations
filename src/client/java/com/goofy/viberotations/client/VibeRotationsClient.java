@@ -14,6 +14,7 @@ import org.lwjgl.glfw.GLFW;
 public class VibeRotationsClient implements ClientModInitializer {
 
 	private final PvpRecorder recorder = PvpRecorder.INSTANCE;
+	private final TrainingMode training = TrainingMode.INSTANCE;
 
 	@Override
 	public void onInitializeClient() {
@@ -29,9 +30,17 @@ public class VibeRotationsClient implements ClientModInitializer {
 				}
 			}
 			recorder.tick(mc);
+			training.tick(mc);
 		});
 		NpcView.register();
-		ClientPlayConnectionEvents.DISCONNECT.register((handler, mc) -> recorder.closeSession());
-		ClientLifecycleEvents.CLIENT_STOPPING.register(mc -> recorder.closeSession());
+		training.register();
+		ClientPlayConnectionEvents.DISCONNECT.register((handler, mc) -> {
+			recorder.closeSession();
+			training.close();
+		});
+		ClientLifecycleEvents.CLIENT_STOPPING.register(mc -> {
+			recorder.closeSession();
+			training.close();
+		});
 	}
 }

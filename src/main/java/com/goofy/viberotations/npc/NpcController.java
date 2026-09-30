@@ -28,8 +28,8 @@ import java.util.Locale;
  * Singleplayer-only NPC whose head is turned by {@link HumanRotationEngine}.
  *
  * <p>Commands: {@code /npc spawn | moveto <yaw> <pitch> [<yaw> <pitch> ...] | auto start [mixed|short|long] |
- * auto stop | delay <ms> | stop |
- * remove | record on|off | param <name> [value] | params reset}. In moveto, a value starting with
+ * auto stop | auto burst <count> [gapMs] [restMs] | auto burst off | auto blocks on|off | auto settings |
+ * delay <ms> | delay <minMs> <maxMs> | stop | remove | record on|off | param <name> [value] | params reset}. In moveto, a value starting with
  * {@code ~} is relative to the previous waypoint (or the NPC's current rotation for the first).</p>
  */
 public final class NpcController {
@@ -42,6 +42,7 @@ public final class NpcController {
 	private static int delayMs = 0;
 	private static long seed = System.nanoTime();
 	private static NpcAutoRun auto;
+	private static final AutoSettings autoSettings = new AutoSettings();
 
 	private NpcController() {}
 
@@ -56,6 +57,11 @@ public final class NpcController {
 		});
 		ServerTickEvents.END_SERVER_TICK.register(NpcController::tick);
 		ServerLifecycleEvents.SERVER_STOPPING.register(server -> remove());
+	}
+
+	/** Replaces the parameters used from the next /npc spawn, e.g. with a trained seed. Call on the server thread. */
+	public static void useParams(EngineParams p) {
+		params = p.copy();
 	}
 
 	/** The live NPC, or null. Read by the client's first-person view in the same JVM. */
@@ -98,10 +104,10 @@ public final class NpcController {
 								.executes(NpcController::moveTo)))
 				.then(Commands.literal("delay")
 						.then(Commands.argument("ms", IntegerArgumentType.integer(0, 60_000))
-								.executes(ctx -> {
-									delayMs = IntegerArgumentType.getInteger(ctx, "ms");
-									return ok(ctx, "Waypoint delay: " + delayMs + " ms");
-								})))
+								.executes(ctx -> setDelay(ctx, IntegerArgumentType.getInteger(ctx, "ms"), -1))
+								.then(Commands.argument("maxMs", IntegerArgumentType.integer(0, 60_000))
+										.executes(ctx -> setDelay(ctx, IntegerArgumentType.getInteger(ctx, "ms"),
+												IntegerArgumentType.getInteger(ctx, "maxMs"))))))
 				.then(Commands.literal("stop").executes(ctx -> {
 					stopAuto(ctx);
 					if (engine != null) {
@@ -121,7 +127,23 @@ public final class NpcController {
 								engine.stop();
 							}
 							return 1;
-						})))
+						}))
+						.then(Commands.literal("burst")
+								.then(Commands.literal("off").executes(ctx -> {
+									autoSettings.burst = 1;
+									return ok(ctx, "Auto: " + autoSettings.describe());
+								}))
+								.then(Commands.argument("count", IntegerArgumentType.integer(1, 50))
+										.executes(ctx -> setBurst(ctx, -1, -1))
+										.then(Commands.argument("gapMs", IntegerArgumentType.integer(0, 10_000))
+												.executes(ctx -> setBurst(ctx, IntegerArgumentType.getInteger(ctx, "gapMs"), -1))
+												.then(Commands.argument("restMs", IntegerArgumentType.integer(0, 60_000))
+														.executes(ctx -> setBurst(ctx, IntegerArgumentType.getInteger(ctx, "gapMs"),
+																IntegerArgumentType.getInteger(ctx, "restMs")))))))
+						.then(Commands.literal("blocks")
+								.then(Commands.literal("on").executes(ctx -> setBlocks(ctx, true)))
+								.then(Commands.literal("off").executes(ctx -> setBlocks(ctx, false))))
+						.then(Commands.literal("settings").executes(ctx -> ok(ctx, "Auto: " + autoSettings.describe()))))
 				.then(Commands.literal("remove").executes(ctx -> {
 					remove();
 					return ok(ctx, "NPC removed");
@@ -169,6 +191,7 @@ public final class NpcController {
 		}
 		remove();
 		ServerLevel level = ctx.getSource().getLevel();
+		NpcTargets.removeAll(level);
 		Mannequin m = EntityType.MANNEQUIN.create(level, EntitySpawnReason.COMMAND);
 		if (m == null) {
 			return fail(ctx, "Could not create the NPC");
@@ -200,21 +223,65 @@ public final class NpcController {
 			recording = true;
 			startRecorder(ctx.getSource().getServer());
 		}
-		auto = new NpcAutoRun(mode, seed ^ System.nanoTime(), delayMs, params.toleranceDeg);
-		String gap = delayMs > 0 ? delayMs + " ms" : "150–600 ms";
-		return ok(ctx, "Auto flicks (" + mode.name().toLowerCase() + ") started, " + gap
-				+ " between flicks. Logging to flicks.csv. /npc auto stop to end.");
+		if (auto != null) {
+			auto.stop();
+		}
+		engine.stop();
+		auto = new NpcAutoRun(mode, seed ^ System.nanoTime(), autoSettings, params.toleranceDeg,
+				new NpcTargets((ServerLevel) npc.level(), npc));
+		return ok(ctx, "Auto flicks (" + mode.name().toLowerCase() + ") started: " + autoSettings.describe()
+				+ ". Logging to flicks.csv. /npc auto stop to end.");
 	}
 
 	private static void stopAuto(CommandContext<CommandSourceStack> ctx) {
 		if (auto != null) {
+			auto.stop();
 			ctx.getSource().sendSuccess(() -> Component.literal("Auto flicks stopped after " + auto.count() + " flicks"), false);
 			auto = null;
 		}
 	}
 
+	/** {@code /npc delay}: the moveto waypoint delay, and the auto rest (a range if max is given; 0 = default 150–600 ms). */
+	private static int setDelay(CommandContext<CommandSourceStack> ctx, int ms, int maxMs) {
+		if (maxMs >= 0 && maxMs < ms) {
+			return fail(ctx, "Max must be at least min");
+		}
+		delayMs = ms;
+		if (maxMs >= 0) {
+			autoSettings.restMinMs = ms;
+			autoSettings.restMaxMs = maxMs;
+		} else if (ms == 0) {
+			autoSettings.restMinMs = AutoSettings.DEFAULT_REST_MIN_MS;
+			autoSettings.restMaxMs = AutoSettings.DEFAULT_REST_MAX_MS;
+		} else {
+			autoSettings.restMinMs = ms;
+			autoSettings.restMaxMs = ms;
+		}
+		return ok(ctx, "Waypoint delay: " + delayMs + " ms. Auto: " + autoSettings.describe());
+	}
+
+	private static int setBurst(CommandContext<CommandSourceStack> ctx, int gapMs, int restMs) {
+		autoSettings.burst = IntegerArgumentType.getInteger(ctx, "count");
+		if (gapMs >= 0) {
+			autoSettings.gapMs = gapMs;
+		}
+		if (restMs >= 0) {
+			autoSettings.restMinMs = restMs;
+			autoSettings.restMaxMs = restMs;
+		}
+		return ok(ctx, "Auto: " + autoSettings.describe() + (auto != null ? " (from the next burst)" : ""));
+	}
+
+	private static int setBlocks(CommandContext<CommandSourceStack> ctx, boolean on) {
+		autoSettings.blocks = on;
+		return ok(ctx, "Auto: " + autoSettings.describe());
+	}
+
 	private static int moveTo(CommandContext<CommandSourceStack> ctx) {
-		auto = null;
+		if (auto != null) {
+			auto.stop();
+			auto = null;
+		}
 		if (npc() == null) {
 			return fail(ctx, "No NPC. Use /npc spawn first.");
 		}
@@ -284,6 +351,12 @@ public final class NpcController {
 
 	private static void remove() {
 		closeRecorder();
+		if (auto != null) {
+			auto.stop();
+		}
+		if (npc != null && npc.level() instanceof ServerLevel level) {
+			NpcTargets.removeAll(level);
+		}
 		if (npc != null && !npc.isRemoved()) {
 			npc.discard();
 		}

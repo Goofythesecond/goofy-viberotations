@@ -1,6 +1,7 @@
 package com.goofy.viberotations.engine;
 
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
 import java.util.Random;
@@ -22,6 +23,9 @@ public final class HumanRotationEngine {
 
 	public enum Phase { IDLE, REACTING, FLICK, PAUSE, DWELL }
 
+	/** A waypoint the engine finished: when, where the aim ended up, and how many flicks it took. */
+	public record Arrival(int waypoint, double timeMs, double yaw, double pitch, int submovements) {}
+
 	/** Receives every simulated frame that has a non-zero rotation. */
 	public interface FrameSink {
 		void frame(double timeMs, double dYaw, double dPitch, double yaw, double pitch, Phase phase, int waypoint);
@@ -41,6 +45,9 @@ public final class HumanRotationEngine {
 	private double[] goal;
 	private int waypointIndex = -1;
 	private double dwellMs;
+	/** Waypoints after the first were visible in advance, so they start after a pause, not a reaction. */
+	private boolean anticipate;
+	private final List<Arrival> arrivals = new ArrayList<>();
 
 	private Phase phase = Phase.IDLE;
 	private double phaseLeftMs;
@@ -63,6 +70,16 @@ public final class HumanRotationEngine {
 
 	/** Replaces any queued waypoints. Each is {yaw, pitch}. {@code dwellMs} is the wait after reaching each one. */
 	public void setWaypoints(List<double[]> targets, double dwellMs) {
+		setWaypoints(targets, dwellMs, false);
+	}
+
+	/**
+	 * Like {@link #setWaypoints(List, double)}. With {@code anticipate}, every waypoint after the
+	 * first starts after a pause-length gap instead of a full reaction delay, as when all the
+	 * targets are visible from the start (a burst).
+	 */
+	public void setWaypoints(List<double[]> targets, double dwellMs, boolean anticipate) {
+		this.anticipate = anticipate;
 		waypoints.clear();
 		for (double[] t : targets) {
 			waypoints.add(new double[]{t[0], clampPitch(t[1])});
@@ -74,6 +91,7 @@ public final class HumanRotationEngine {
 
 	public void stop() {
 		waypoints.clear();
+		arrivals.clear();
 		goal = null;
 		phase = Phase.IDLE;
 	}
@@ -88,6 +106,13 @@ public final class HumanRotationEngine {
 	public int waypointIndex() { return waypointIndex; }
 	public double[] goal() { return goal; }
 	public double timeMs() { return timeMs; }
+	/** Returns and clears the waypoints finished since the last call, oldest first. */
+	public List<Arrival> drainArrivals() {
+		List<Arrival> out = List.copyOf(arrivals);
+		arrivals.clear();
+		return out;
+	}
+
 	/** Flicks used for the current (or last) waypoint. */
 	public int submovements() { return submovements; }
 
@@ -152,10 +177,13 @@ public final class HumanRotationEngine {
 			phase = Phase.IDLE;
 			return;
 		}
+		boolean first = waypointIndex < 0;
 		waypointIndex++;
 		submovements = 0;
 		phase = Phase.REACTING;
-		phaseLeftMs = logNormal(p.reactionMedianMs, p.reactionSigma);
+		phaseLeftMs = anticipate && !first
+				? Math.min(p.pauseMaxMs, logNormal(p.pauseMedianMs, p.pauseSigma))
+				: logNormal(p.reactionMedianMs, p.reactionSigma);
 	}
 
 	private void startFlick() {
@@ -208,6 +236,11 @@ public final class HumanRotationEngine {
 	}
 
 	private void arrive() {
+		arrivals.add(new Arrival(waypointIndex, timeMs, yaw, pitch, submovements));
+		if (arrivals.size() > 256) {
+			// Callers that never drain (moveto, the harness) don't need old arrivals.
+			arrivals.remove(0);
+		}
 		if (waypoints.isEmpty()) {
 			phase = Phase.IDLE;
 			return;
@@ -250,12 +283,16 @@ public final class HumanRotationEngine {
 
 	// ─── Math ────────────────────────────────────────────────────────────
 
-	/** Minimum-jerk curve with {@code profileTrim} cut off both ends, rescaled to run 0..1. */
+	/**
+	 * Minimum-jerk curve with {@code profileTrim} cut off both ends, rescaled to run 0..1, then
+	 * blended toward a straight line by {@code profileLinear}.
+	 */
 	private double profile(double v) {
 		double c = p.profileTrim;
 		double lo = minJerk(c);
 		double hi = minJerk(1 - c);
-		return (minJerk(c + v * (1 - 2 * c)) - lo) / (hi - lo);
+		double bell = (minJerk(c + v * (1 - 2 * c)) - lo) / (hi - lo);
+		return bell + (v - bell) * p.profileLinear;
 	}
 
 	private static double minJerk(double v) {
